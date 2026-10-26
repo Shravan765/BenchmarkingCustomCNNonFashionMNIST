@@ -1,9 +1,17 @@
+import os
+
+os.environ["OMP_NUM_THREADS"] = "8"
+os.environ["MKL_NUM_THREADS"] = "8"
+
+import torch
+
+torch.set_num_threads(8)
+
 from collections import defaultdict
 import random
 import numpy as np
-import torch
 import torch.nn as nn
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, random_split
 from torchvision.datasets import FashionMNIST
 from torchvision.transforms import v2
 from tqdm import tqdm
@@ -13,7 +21,9 @@ from MyCNNModel import (
     MyCNNModel_v1_1,
     MyCNNModel_v2_0,
     MyCNNModel_v2_1,
-    MyCNNModel_v3
+    MyCNNModel_v3,
+    MyCNNModel_v4,
+    MyCNNModel_v5
 )
 
 # -----------------------------------------------------------------------------
@@ -42,23 +52,40 @@ transform = v2.Compose([
     v2.Normalize((0.5,), (0.5,))
 ])
 
-train_dataset = FashionMNIST(root='./dataset', train=True, download=False, transform=transform)
+train_transforms = v2.Compose([
+    v2.RandomHorizontalFlip(p=0.5), # horizontally inverted fashion article is still the same
+    v2.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.2),
+    v2.ToImage(),
+    v2.ToDtype(torch.float32, scale=True),
+    v2.Normalize((0.5,), (0.5,)),
+])
+
+train_dataset = FashionMNIST(root='./dataset', train=True, download=False, transform=train_transforms)
 test_dataset = FashionMNIST(root='./dataset', train=False, download=False, transform=transform)
 
-train_loader = DataLoader(train_dataset, batch_size=64, shuffle=True)
-test_loader = DataLoader(test_dataset, batch_size=64, shuffle=False)
+train_size = int(9/10 * len(train_dataset))
+val_size = int(1/10 * len(train_dataset))
+
+g = torch.Generator().manual_seed(SEED)
+
+train_sub , val_sub = random_split(train_dataset, [train_size, val_size], generator=g)
+train_loader = DataLoader(train_sub, batch_size=64, shuffle=True, generator=g, num_workers=2)
+validation_loader = DataLoader(val_sub, batch_size=64, shuffle=False, generator=g, num_workers=2)
+test_loader = DataLoader(test_dataset, batch_size=64, shuffle=False, generator=g, num_workers=2)
 
 # -----------------------------------------------------------------------------
 # Experiment Setup & Data Structures
 # -----------------------------------------------------------------------------
 ITER_COUNT = 5
-epochs_list = [1, 5, 10]
+epochs_list = [10]
 model_classes = [
-    MyCNNModel_v1_0, 
-    MyCNNModel_v1_1, 
-    MyCNNModel_v2_0, 
-    MyCNNModel_v2_1, 
-    MyCNNModel_v3
+    MyCNNModel_v1_0,
+    MyCNNModel_v1_1,
+    MyCNNModel_v2_0,
+    MyCNNModel_v2_1,
+    MyCNNModel_v3,
+    MyCNNModel_v4,
+    MyCNNModel_v5
 ]
 
 # Stores list of accuracies: key = (model_name, num_epochs) -> list of floats
@@ -67,6 +94,30 @@ results = defaultdict(list)
 # -----------------------------------------------------------------------------
 # Iteration & Training Loop
 # -----------------------------------------------------------------------------
+
+criterion = nn.CrossEntropyLoss()
+
+def eval_loop(model, loader):
+    correct = 0
+    total = 0
+    test_loss = 0.0
+    model.eval()
+    with torch.no_grad():
+        for imgs, labels in tqdm(loader, desc="Validation"):
+            imgs, labels = imgs.to(device), labels.to(device)
+            
+            outputs = model(imgs)
+            loss = criterion(outputs, labels)
+            test_loss += loss.item()
+            
+            pred = torch.argmax(outputs, 1)
+            total += labels.size(0)
+            correct += (pred == labels).sum().item()
+    
+    avg_test_loss = test_loss / len(loader)
+    accuracy = correct / total
+    return avg_test_loss, correct, total, accuracy
+
 for iteration in range(1, ITER_COUNT + 1):
     print(f"\n{'='*80}\n STARTING EXPERIMENT ITERATION {iteration}/{ITER_COUNT} \n{'='*80}")
     
@@ -77,51 +128,53 @@ for iteration in range(1, ITER_COUNT + 1):
         for model_cls in model_classes:
             model = model_cls().to(device)
             model_name = model.__class__.__name__
+
+            model = torch.compile(model)
             
             print("#" * 80, "\n")
             print(f"{'!'*10}\nIter: {iteration}/{ITER_COUNT} | Epochs: {num_epochs} | Model: {model_name}\n{'!'*10}\n")
-            
-            criterion = nn.CrossEntropyLoss()
+        
             optim = torch.optim.Adam(model.parameters())
 
             # --- Training Loop ---
             for epoch in range(num_epochs):
+                train_correct = 0
+                train_total = 0
                 model.train()
                 running_loss = 0.0
                 for imgs, labels in tqdm(train_loader, desc=f"Epoch {epoch+1}/{num_epochs}"):
                     imgs, labels = imgs.to(device), labels.to(device)
-                    
+                    train_total += labels.size(0)
                     optim.zero_grad()
                     outputs = model(imgs)
+
+                    pred = torch.argmax(outputs, 1)
+                    train_correct += (pred == labels).sum().item()
+
                     loss = criterion(outputs, labels)
                     loss.backward()
                     optim.step()
                     
                     running_loss += loss.item()
                 
-                print(f'Training Epoch [{epoch+1}/{num_epochs}], Average Loss: {running_loss / len(train_loader):.3f}')
+                print(f'Training Epoch [{epoch+1}/{num_epochs}], \
+                      Average Loss: {running_loss / len(train_loader):.3f}, \
+                        Correct/Total = {train_correct}/{train_total}')
 
-            # --- Evaluation Loop ---
+                # --- Evaluation (Validation) Loop ---
+                print("\n!!!!! Validation !!!!!")
+
+                avg_test_loss, correct, total, accuracy = eval_loop(model, validation_loader)
+                
+                print(f"Average Test Loss : {avg_test_loss:.3f}")
+                print(f"Correct = {correct} , Total = {total}")
+                print(f"Accuracy = {accuracy:.4f}\n")
+
+
+            # --- Evaluation (Test) Loop ---
             print("\n!!!!! Evaluation !!!!!")
-            model.eval()
-            correct = 0
-            total = 0
-            test_loss = 0.0
-            
-            with torch.no_grad():
-                for imgs, labels in tqdm(test_loader, desc="Testing"):
-                    imgs, labels = imgs.to(device), labels.to(device)
-                    
-                    outputs = model(imgs)
-                    loss = criterion(outputs, labels)
-                    test_loss += loss.item()
-                    
-                    _, pred = torch.max(outputs, 1)
-                    total += labels.size(0)
-                    correct += (pred == labels).sum().item()
-            
-            avg_test_loss = test_loss / len(test_loader)
-            accuracy = correct / total
+
+            avg_test_loss, correct, total, accuracy = eval_loop(model, test_loader)
             
             # Record final accuracy for this iteration
             results[(model_name, num_epochs)].append(accuracy)

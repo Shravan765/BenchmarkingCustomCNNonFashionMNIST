@@ -85,6 +85,12 @@ class MyCNNModel_v2_1(nn.Module):
         x = self.fc(x) # returns one among the 10 labels
         return x
 
+'''
+Utilises 5x5 kernel at start and then goes for 3x3
+Total parameter/wts count = 5x5x1x32 + 32 + 3x3x32x64 + 64
+                            + 256x32+32 + 32x10 + 10
+                            = 27_882
+'''
 class MyCNNModel_v3(nn.Module):
     def __init__(self):
         super(MyCNNModel_v3, self).__init__()
@@ -105,4 +111,103 @@ class MyCNNModel_v3(nn.Module):
         x = self.fc1(x) # 256 -> 32
         x = torch.relu(x) 
         x = self.fc2(x) # returns one among the 10 labels
+        return x
+
+'''
+Uses VGG style 3x3 stacked CNN
+Total parameter/wts count = 3x3x1x32 + 32 + 3x3x32x32 + 32 
+                            + 3x3x32x64 + 64 + 3x3x64x128 + 128 
+                            + 512x64 + 64 + 64x10 + 10
+                            = 135_402
+
+Utilises dropout2d (20% of channels) and dropout (50% of values of input)
+'''
+class MyCNNModel_v4(nn.Module):
+    def __init__(self):
+        super(MyCNNModel_v4, self).__init__()
+        self.conv2d_1_1 = nn.Conv2d(in_channels=1, out_channels=32, kernel_size=3)
+        self.conv2d_1_2 = nn.Conv2d(in_channels=32, out_channels=32, kernel_size=3)
+        self.conv2d_2_1 = nn.Conv2d(in_channels=32, out_channels=64, kernel_size=3)
+        self.conv2d_2_2 = nn.Conv2d(in_channels=64, out_channels=128, kernel_size=3)
+        self.maxPool_1 = nn.MaxPool2d(kernel_size=3, stride=3 ,ceil_mode=False)
+        self.maxPool_2 = nn.MaxPool2d(kernel_size=2, stride=2 ,ceil_mode=False)
+        self.fc1 = nn.Linear(in_features=128*2*2, out_features=64)
+        self.fc2 = nn.Linear(in_features=64, out_features=10)
+
+        self.dropout2d = nn.Dropout2d(p=0.2)
+        self.dropout1d = nn.Dropout(p=0.5)
+
+    def forward(self, x): # x will be 1 x 28 x 28
+        x = self.conv2d_1_1(x) # 32 x 26 x 26
+        x = torch.relu(x) # non-linearity
+        x = self.conv2d_1_2(x) # 32 x 24 x 24
+        x = self.maxPool_1(x) # 32 x 8 x 8
+        x = torch.relu(x) # non-linearity
+
+        x = self.dropout2d(x)
+
+        x = self.conv2d_2_1(x) # 64 x 6 x 6
+        x = torch.relu(x) # non-linearity
+        x = self.conv2d_2_2(x) # 128 x 4 x 4
+        x = self.maxPool_2(x) # 128 x 2 x 2
+        x = torch.relu(x) # non-linearity
+
+
+        x = torch.flatten(x, start_dim=1)
+        x = self.fc1(x) # 512 -> 64 
+        x = torch.relu(x) # non-linearity
+
+        x = self.dropout1d(x)
+
+        x = self.fc2(x) # 64 -> 10
+        return x
+
+
+'''
+More channels (and hence more parameters from MyCNNModel_v4)
+Total parameter/wts count = 3x3x1x32 + 32 + 3x3x32x64 + 64 
+                            + 3x3x64x128 + 128 + 3x3x128x256 + 256 
+                            + 1024x128 + 128 + 128x10 + 10
+                            = 520_330
+
+Utilises dropout2d (20% of channels) and dropout (50% of values of input)
+'''
+class MyCNNModel_v5(nn.Module):
+    def __init__(self):
+        super(MyCNNModel_v5, self).__init__()
+        self.conv2d_1_1 = nn.Conv2d(in_channels=1, out_channels=32, kernel_size=3)
+        self.conv2d_1_2 = nn.Conv2d(in_channels=32, out_channels=64, kernel_size=3)
+        self.conv2d_2_1 = nn.Conv2d(in_channels=64, out_channels=128, kernel_size=3)
+        self.conv2d_2_2 = nn.Conv2d(in_channels=128, out_channels=256, kernel_size=3)
+        self.maxPool_1 = nn.MaxPool2d(kernel_size=3, stride=3 ,ceil_mode=False)
+        self.maxPool_2 = nn.MaxPool2d(kernel_size=2, stride=2 ,ceil_mode=False)
+        self.fc1 = nn.Linear(in_features=256*2*2, out_features=128)
+        self.fc2 = nn.Linear(in_features=128, out_features=10)
+
+        self.dropout2d = nn.Dropout2d(p=0.2)
+        self.dropout1d = nn.Dropout(p=0.5)
+
+    def forward(self, x): # x will be 1 x 28 x 28
+        x = self.conv2d_1_1(x) # 32 x 26 x 26
+        x = torch.relu(x) # non-linearity
+        x = self.conv2d_1_2(x) # 64 x 24 x 24
+        x = self.maxPool_1(x) # 64 x 8 x 8
+        x = torch.relu(x) # non-linearity
+
+        x = self.dropout2d(x)
+
+        x = self.conv2d_2_1(x) # 128 x 6 x 6
+        x = torch.relu(x) # non-linearity
+        x = self.conv2d_2_2(x) # 256 x 4 x 4
+        x = self.maxPool_2(x) # 256 x 2 x 2
+        x = torch.relu(x) # non-linearity
+
+
+        x = torch.flatten(x, start_dim=1)
+        x = self.fc1(x) # 1024 -> 128 
+        x = torch.relu(x) # non-linearity
+
+        x = self.dropout1d(x)
+
+        x = self.fc2(x) # 128 -> 10
         return x
